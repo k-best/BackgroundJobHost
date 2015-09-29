@@ -25,7 +25,7 @@ namespace BackgroundJob.Core
         public SmtpService(string host, string user, string password, string @from)
         {
             _host = host.Check(s => !string.IsNullOrWhiteSpace(s), s => new ArgumentOutOfRangeException("host"));
-            _from = @from.Check(s => !string.IsNullOrWhiteSpace(s), s => new ArgumentOutOfRangeException("host"));
+            _from = @from.Check(s => !string.IsNullOrWhiteSpace(s), s => new ArgumentOutOfRangeException("from"));
             _user = user;
             _password = password;
         }

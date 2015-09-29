@@ -6,10 +6,11 @@ using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
 using System.Threading;
+using BackgroundJob.Core.Serialization;
 
 namespace BackgroundJob.Host
 {
-    public class BackgroundJobDetail
+    internal class BackgroundJobDetail:IBackgroundJobDetail
     {
         public BackgroundJobDetail()
         {
@@ -113,39 +114,22 @@ namespace BackgroundJob.Host
             }
         }
 
-        public object Perform(IJobActivator activator, CancellationToken cancellationToken)
+        public void Perform(IJobActivator activator, CancellationToken cancellationToken)
         {
             if (activator == null)
                 throw new ArgumentNullException("activator");
             if (cancellationToken == null)
                 throw new ArgumentNullException("cancellationToken");
-            var instance = (object)null;
-            try
-            {
-                if (!Method.IsStatic)
-                    instance = Activate(activator);
-                var deserializedArguments = DeserializeArguments(cancellationToken);
-                return InvokeMethod(instance, deserializedArguments);
-            }
-            finally
-            {
-                Dispose(instance);
-            }
+            var deserializedArguments = DeserializeArguments(cancellationToken);
+            if (!Method.IsStatic)
+                Activate(activator, deserializedArguments);
+            else
+                InvokeMethod(null, deserializedArguments);
         }
 
-        private object Activate(IJobActivator activator)
+        private void Activate(IJobActivator activator, object[] deserializedArguments)
         {
-            try
-            {
-                var obj = activator.ActivateJob(Type);
-                if (obj == null)
-                    throw new InvalidOperationException(string.Format("JobActivator returned NULL instance of the '{0}' type.", Type));
-                return obj;
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException("An exception occurred during job activation.", ex);
-            }
+            activator.ActivateJob(Type, Method, deserializedArguments);
         }
 
         private object InvokeMethod(object instance, object[] deserializedArguments)
@@ -198,59 +182,8 @@ namespace BackgroundJob.Host
         }
     }
 
-    public class JobFailedException : Exception
+    public interface IBackgroundJobDetail
     {
-        public JobFailedException(string message, Exception innerException):base(message, innerException)
-        {
-        }
-    }
-
-    public class SerializedJob
-    {
-        public string Type { get; private set; }
-
-        public string Method { get; private set; }
-
-        public string ParameterTypes { get; private set; }
-
-        public string Arguments { get; set; }
-
-        public SerializedJob(string type, string method, string parameterTypes, string arguments)
-        {
-            Type = type;
-            Method = method;
-            ParameterTypes = parameterTypes;
-            Arguments = arguments;
-        }
-
-        public BackgroundJobDetail Deserialize()
-        {
-            try
-            {
-                var type = System.Type.GetType(Type, true, true);
-                var types = JobHelper.FromJson<Type[]>(ParameterTypes);
-                var method = type.GetMethod(Method, types);
-                if (method == null)
-                    throw new InvalidOperationException(
-                        string.Format("The type `{0}` does not contain a method with signature `{1}({2})`",
-                            type.FullName, Method,
-                            string.Join(", ",
-                                types.Select(x => x.Name))));
-                var arguments = JobHelper.FromJson<string[]>(Arguments);
-                return new BackgroundJobDetail(type, method, arguments);
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException("Could not load the job. See inner exception for the details.", ex);
-            }
-        }
-
-        public static SerializedJob Serialize(BackgroundJobDetail job)
-        {
-            return new SerializedJob(job.Type.AssemblyQualifiedName, job.Method.Name,
-                JobHelper.ToJson(
-                    job.Method.GetParameters().Select(x => x.ParameterType)),
-                JobHelper.ToJson(job.Arguments));
-        }
+        void Perform(IJobActivator activator, CancellationToken cancellationToken);
     }
 }

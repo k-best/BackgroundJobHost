@@ -58,5 +58,14 @@ namespace BackgroundJob.Host {
                 return ((string)(this["NotificationFrom"]));
             }
         }
+        
+        [global::System.Configuration.ApplicationScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool EnableWcfEndpoint {
+            get {
+                return ((bool)(this["EnableWcfEndpoint"]));
+            }
+        }
     }
 }

@@ -1,8 +1,9 @@
 using System;
+using System.Linq;
 using System.Text;
 using System.Threading;
+using Autofac;
 using BackgroundJob.Core;
-using Microsoft.Practices.Unity;
 using NLog;
 using NLog.Config;
 using NLog.Targets;
@@ -14,7 +15,7 @@ namespace BackgroundJob.Host.Example
         void Process(string someParameter, CancellationToken cancellationToken);
     }
 
-    public class TestJob : ITestJob
+    public class TestJob : ITestJob, IDisposable
     {
         private Logger _logger;
 
@@ -27,35 +28,41 @@ namespace BackgroundJob.Host.Example
         {
             try
             {
-                _logger.Info("Work started at {0}", DateTime.Now);
+                var inst = Guid.NewGuid();
+                _logger.Info("Work {1} started at {0}", DateTime.Now, inst);
                 _logger.Info("Parameter:{0}", someParameter);
-                Thread.Sleep(10000);
-                cancellationToken.ThrowIfCancellationRequested();
+                Thread.Sleep(30000);
+                if (cancellationToken.IsCancellationRequested)
+                {
+                    _logger.Info("Work canceled by host");
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
                 _logger.Info("Work ended at {0}", DateTime.Now);
             }
-            catch (OperationCanceledException e)
+            catch (Exception e)
             {
                 _logger.Fatal(e);
             }
         }
+
+        public void Dispose()
+        {
+            _logger.Info("Dispose");
+        }
     }
 
-    public class ContainerConfigurer : IBackgroundJobConfigurer
+    public class TestJobContainerConfigurer : IBackgroundJobConfigurer
     {
-        public IUnityContainer ConfigureContainer(IUnityContainer container)
-        {
-            var logger = GetLogger();
-            container.RegisterInstance(logger);
-            container.RegisterType<ITestJob, TestJob>();
-            return container;
-        }
-
         private static Logger GetLogger()
         {
             const string name = "ExampleJob";
+            const string targetName = name + "Target";
             if (LogManager.Configuration == null)
                 LogManager.Configuration = new LoggingConfiguration();
             var logConfig = LogManager.Configuration;
+
+            if(logConfig.AllTargets.Any(c=> c.Name==targetName))
+                return LogManager.GetLogger(name);
 
             var fileTarget = new FileTarget
             {
@@ -67,15 +74,22 @@ namespace BackgroundJob.Host.Example
                 Layout =
                     "${longdate} ${pad:padding=-5:inner=${level:uppercase=true}} ${event-context:item=context} ${logger} ${message}${onexception:${exception:format=tostring}}",
                 Encoding = Encoding.UTF8,
-                Name = name + "Target",
+                Name = targetName,
             };
 
-            logConfig.AddTarget(name + "Target", fileTarget);
+            logConfig.AddTarget(targetName, fileTarget);
             logConfig.LoggingRules.Add(new LoggingRule(name, LogLevel.Trace, fileTarget));
 
             LogManager.Configuration = logConfig;
 
             return LogManager.GetLogger(name);
+        }
+
+        public ContainerBuilder ConfigureContainer(ContainerBuilder childContainer)
+        {
+            childContainer.RegisterInstance(GetLogger()).SingleInstance();
+            childContainer.RegisterType<TestJob>().As<ITestJob>();
+            return childContainer;
         }
     }
 }

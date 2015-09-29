@@ -1,17 +1,19 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.ServiceModel;
 using BackgroundJob.Configuration;
+using BackgroundJob.Core;
 using BackgroundJob.Host.Quartz;
 
 namespace BackgroundJob.Host
 {
     public class EnqueueService:IEnqueueService
     {
-        private readonly JobConfigurations _jobsConfig;
+        private readonly IEnumerable<IJobConfiguration> _jobsConfig;
         private readonly IEnqueuerFactory _enqueuerFactory;
 
-        public EnqueueService(JobConfigurations jobsConfig, IEnqueuerFactory enqueuerFactory)
+        public EnqueueService(IEnumerable<IJobConfiguration> jobsConfig, IEnqueuerFactory enqueuerFactory)
         {
             _jobsConfig = jobsConfig;
             _enqueuerFactory = enqueuerFactory;
@@ -19,13 +21,18 @@ namespace BackgroundJob.Host
 
         public void Enqueue(string jobName)
         {
-            var jobs = _jobsConfig.Jobs.Cast<JobConfiguration>().ToArray();
-            var jobConfiguration = jobs.FirstOrDefault(c => c.Name == jobName);
+            var jobConfiguration = _jobsConfig.FirstOrDefault(c => c.Name == jobName);
             if(jobConfiguration==null)
                 throw new InvalidOperationException(string.Format("Не найден зарегистрированный обработчик {0}", jobName));
             var jobType = Type.GetType(jobConfiguration.Type);
             var enqueuer = _enqueuerFactory.Create(jobType);
             enqueuer.Enqueue();
+            _enqueuerFactory.ReturnJob(enqueuer);
+        }
+
+        public void ChangeScheduleForJob(string jobName)
+        {
+            
         }
     }
 
@@ -34,5 +41,8 @@ namespace BackgroundJob.Host
     {
         [OperationContract]
         void Enqueue(string jobName);
+
+        [OperationContract]
+        void ChangeScheduleForJob(string jobName);
     }
 }

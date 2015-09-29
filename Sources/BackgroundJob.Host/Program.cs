@@ -3,12 +3,11 @@ using System.Collections.Generic;
 using System.Configuration;
 using System.Linq;
 using System.ServiceProcess;
-using System.Text;
+using Autofac;
 using BackgroundJob.Configuration;
 using BackgroundJob.Core;
-using BackgroundJob.Host.Example;
+using BackgroundJob.Core.Serialization;
 using BackgroundJob.Host.Quartz;
-using Microsoft.Practices.Unity;
 using NLog;
 using NLog.Config;
 using NLog.Targets;
@@ -35,7 +34,7 @@ namespace BackgroundJob.Host
                     Console.WriteLine("Нажмите ENTER для остановки сервиса...");
                     Console.ReadLine();
                     service.StopImpl();
-                    Console.WriteLine("Сервис останавливается");
+                    Console.WriteLine("Сервис остановлен. Нажмите ENTER");
                     Console.ReadLine();
                 }
                 catch (Exception e)
@@ -53,19 +52,6 @@ namespace BackgroundJob.Host
             }
         }
         
-        private static Dictionary<string, IUnityContainer> GetModuleContainers(IUnityContainer baseContainer)
-        {
-            var dictionary = new Dictionary<string, IUnityContainer>
-            {
-                {
-                    typeof (ITestJob).Assembly.FullName,
-                    new ContainerConfigurer().ConfigureContainer(baseContainer.CreateChildContainer())
-                },
-            };
-
-            return dictionary;
-        }
-
         public static void SomeTestingAction(int[] parameters, decimal divider, string name)
         {
             var result = parameters.Sum(i => i*2)/divider;
@@ -74,51 +60,52 @@ namespace BackgroundJob.Host
 
         private static Logger GetLogger()
         {
-            var logConfig = new LoggingConfiguration();
+            var logConfig = LogManager.Configuration??new XmlLoggingConfiguration("NLog.config", true);
 
-            var consoleTarget = new ColoredConsoleTarget
-            {
-                Layout =
-                    "${date} ${level:uppercase=true} ${event-context:item=context} ${message}${onexception:${exception:format=tostring}}"
-            };
+                var consoleTarget = new ColoredConsoleTarget
+                {
+                    Layout =
+                        "${date} ${level:uppercase=true} ${event-context:item=context} ${message}${onexception:${exception:format=tostring}}"
+                };
 
-            logConfig.AddTarget("console", consoleTarget);
-            logConfig.LoggingRules.Add(new LoggingRule(typeof(Program).Name, LogLevel.Trace, consoleTarget));
+                logConfig.AddTarget("console", consoleTarget);
+                logConfig.LoggingRules.Add(new LoggingRule("Host", LogLevel.Trace, consoleTarget));
 
-            var fileTarget = new FileTarget
-            {
-                FileName = "${basedir}/host"+DateTime.Now.ToString("yyMMddHHmmssff") + ".log",
-                Layout =
-                    "${longdate} ${pad:padding=-5:inner=${level:uppercase=true}} ${event-context:item=context} ${logger} ${message}${onexception:${exception:format=tostring}}",
-                Encoding = Encoding.UTF8,
-                Name = "hostDatedLogTarget"
-            };
+                LogManager.Configuration = logConfig;
 
-            logConfig.AddTarget("hostDatedLogTarget", fileTarget);
-            logConfig.LoggingRules.Add(new LoggingRule(typeof(Program).Name, LogLevel.Trace, fileTarget));
-            LogManager.Configuration = logConfig;
-
-            return LogManager.GetLogger(typeof(Program).Name);
+            return LogManager.GetLogger("Host");
         }
-        
-        internal static UnityContainer CreateDependencyContainer()
+
+        internal static IContainer CreateDependencyContainer()
         {
             var logger = GetLogger();
-            var container = new UnityContainer();
+            var container = new ContainerBuilder();
             container.RegisterInstance<ISchedulerFactory>(new StdSchedulerFactory());
-            container.RegisterInstance(logger, new HierarchicalLifetimeManager());
-            var unityJobFactory = new UnityJobFactory(container);
-            container.RegisterInstance<IJobFactory>(unityJobFactory);
-            container.RegisterInstance<IEnqueuerFactory>(unityJobFactory);
-            container.RegisterInstance((JobConfigurations) ConfigurationManager.GetSection("jobSettings"));
-            var childContainers = GetModuleContainers(container);
-            container.RegisterInstance<IJobActivator>(new UnityJobActivator(container, childContainers));
-            container.RegisterType<IEnqueueService, EnqueueService>();
+            container.RegisterInstance(logger);
+            var jobConfigurations = ((JobConfigurations)ConfigurationManager.GetSection("jobSettings")).Jobs.Cast<JobConfiguration>().ToArray();
+            container.RegisterInstance(jobConfigurations.Select(c => new DbScheduleJobConfiguration(c.Name, c.Type, c.SchedulingTime, c.QueueName, c.MaxReplay)).Cast<IJobConfiguration>());
+            container.RegisterType<AutofacJobActivator>().As<IJobActivator>();
+            container.RegisterType<EnqueueService>().As<IEnqueueService>();
+            container.RegisterType<WcfServiceHostFactory>();
+            container.RegisterType<Service>();
+            RegisterEnqueuers(jobConfigurations, container);
             var settings = Settings.Default;
-            container.RegisterInstance<ISmtpService>(new SmtpService(settings.NotificationSmtpHost,
-                settings.NotificationSmtpUser, settings.NotificationSmtpPassword, settings.NotificationFrom));
-            
-            return container;
+            container.Register(c=>new SmtpService(settings.NotificationSmtpHost,
+                settings.NotificationSmtpUser, settings.NotificationSmtpPassword, settings.NotificationFrom)).As<ISmtpService>();
+
+            container.RegisterType<AutofacQuartzJobFactory>().As<IJobFactory>().InstancePerLifetimeScope();
+            container.RegisterType<AutofacQuartzJobFactory>().As<IEnqueuerFactory>().InstancePerLifetimeScope();
+            container.RegisterGeneric(typeof (RecurringJobWrapper<>)).InstancePerDependency();
+
+            return container.Build();
+        }
+
+        private static void RegisterEnqueuers(IEnumerable<JobConfiguration> jobConfigurations, ContainerBuilder container)
+        {
+            foreach (var type in jobConfigurations.Select(c => c.Type))
+            {
+                container.RegisterType(Type.GetType(type));
+            }
         }
     }
 }

@@ -1,9 +1,15 @@
-﻿using Microsoft.Practices.Unity;
+﻿using System;
+using Autofac;
 
 namespace BackgroundJob.Core
 {
     public interface IBackgroundJobConfigurer
     {
-        IUnityContainer ConfigureContainer(IUnityContainer childContainer);
+        ContainerBuilder ConfigureContainer(ContainerBuilder childContainer);
+    }
+
+    public abstract class ContainerConfigurerTypeAttribute:Attribute, IBackgroundJobConfigurer
+    {
+        public abstract ContainerBuilder ConfigureContainer(ContainerBuilder childContainer);
     }
 }
